@@ -1,0 +1,252 @@
+Ingest Files
+
+from pyspark.sql.types import StructType, StructField, IntegerType, StringType, DoubleType, DateType
+from pyspark.sql.functions import col, current_timestamp, lit
+
+### Circuits ###
+
+circuits_schema = StructType(fields=[StructField("circuitid", IntegerType(),False),
+                                     StructField("circuitRef", StringType(),True),
+                                     StructField("name", StringType(),True),
+                                     StructField("location", StringType(),True),
+                                     StructField("country", StringType(),True),
+                                     StructField("lat", DoubleType(),True),
+                                     StructField ("lng", DoubleType(),True),
+                                     StructField("alt", IntegerType(),True),
+                                     StructField("url", StringType(),True)
+                                    ])
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'circuits.csv'
+circuits_df = spark.read \
+ .option('header', True) \
+ .schema(circuits_schema) \
+ .csv(f"{raw_file_dir}/{file_name}")
+
+circuits_selected_df = circuits_df.select("circuitId", "circuitRef","name","location","country","lat","lng","alt")
+
+circuits_renamed_df = circuits_selected_df.withColumnRenamed("circuitid","circuit_id") \
+    .withColumnRenamed("circuitRef","circuit_ref") \
+    .withColumnRenamed("lat","latitude") \
+    .withColumnRenamed("lng","longitude") \
+    .withColumnRenamed("alt","altitude") \
+    .withColumn("ingestion_date",current_timestamp())
+
+circuits_renamed_df.write.mode("overwrite").parquet(f"{processed_file_dir}/circuits")
+
+### Constructors ###
+
+constructor_schema = "constructorId INT, constructorRef STRING, name STRING, nationality STRING, url STRING"
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'constructors.json'
+
+constructor_df = spark.read \
+    .schema(constructor_schema) \
+    .json(f"{raw_file_dir}/{file_name}")
+
+constructor_df.write.mode("overwrite").partitionBy('nationality').parquet(f"{processed_file_dir}/constructors")
+
+%fs
+ls '/mnt/formula1dl/processed/constructors' 
+
+### Drivers ###  
+
+### Nested JSON Ingestion File
+
+name_schema = StructType(fields=[
+    StructField('forename', StringType(),False),
+    StructField('surname', StringType(),True)
+])
+
+drivers_schema = StructType(fields=[
+    StructField('driverId', IntegerType(),False),
+    StructField('driverRef', StringType(),True),
+    StructField('number', IntegerType(),True),
+    StructField('code', StringType(),True),
+    StructField('name', name_schema),
+    StructField('dob', DateType(),True),
+    StructField('nationality', StringType(),True),
+    StructField('url', StringType(),True),
+])
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'drivers.json'
+
+drivers_df = spark.read \
+    .schema(drivers_schema) \
+    .json(f"{raw_file_dir}/{file_name}")
+
+drivers_df = drivers_df.withColumnRenamed("driverId","driver_id") \
+                        .withColumnRenamed("driverRef",'driver_ref') \
+                        .withColumn("ingestion_date", current_timestamp()) \
+                        .withColumn("name",concat(col("name.forename"), lit(" "), col("name.surname"))) \
+                        .drop("url")
+
+drivers_df.write.mode("overwrite").partitionBy('nationality').parquet(f"{processed_file_dir}/drivers")
+
+### Lap Times ###
+
+### Multiple CSV Files with same schema in same folder used for ingesting ###
+
+lap_times_schema = StructType(fields=[
+    StructField('raceId', IntegerType(),False),
+    StructField('driverId', IntegerType(),False),
+    StructField('lap', IntegerType(),False),
+    StructField('position', IntegerType(),True),
+    StructField('time', StringType(),True),
+    StructField('milliseconds', IntegerType(),True),
+])
+
+raw_file_dir = '/mnt/formula1dl/raw/lap_times'
+processed_file_dir = '/mnt/formula1dl/processed'
+
+lap_times_df = spark.read \
+    .schema(lap_times_schema) \
+    .csv(f"{raw_file_dir}")
+
+lap_times_df = lap_times_df.withColumnRenamed("raceId",'race_id') \
+    .withColumnRenamed("driverId",'driver_id') \
+    .withColumn("ingestion_date", current_timestamp())
+
+lap_times_df.write.mode("overwrite").parquet(f"{processed_file_dir}/lap_times")
+
+### Pit Stops ###
+
+### Multi-Line JSON File ###
+
+pit_stops_schema = StructType(fields=[
+    StructField('raceId', IntegerType(),False),
+    StructField('driverId', IntegerType(),False),
+    StructField('stop', IntegerType(),False),
+    StructField('lap', IntegerType(),False),
+    StructField('time', StringType(),False),
+    StructField('duration', StringType(),True),
+    StructField('milliseconds', IntegerType(),True),
+])
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'pit_stops.json'
+
+pitstops_df = spark.read \
+    .schema(pit_stops_schema) \
+    .option("multiLine", True) \
+    .json(f"{raw_file_dir}/{file_name}")
+
+pitstops_df = pitstops_df.withColumnRenamed("raceId",'race_id') \
+    .withColumnRenamed("driverId",'driver_id') \
+    .withColumn("ingestion_date", current_timestamp())
+
+pitstops_df.write.mode("overwrite").parquet(f"{processed_file_dir}/pit_stops")
+
+### Qualifying ###
+
+### Multi-Line JSON Files with same schema in same directory ###
+
+qualifying_schema = StructType(fields=[
+    StructField('qualifyId', IntegerType(),False),
+    StructField('raceId', IntegerType(),False),
+    StructField('driverId', IntegerType(),False),
+    StructField('constructorId', IntegerType(),False),
+    StructField('number', IntegerType(),False),
+    StructField('position', IntegerType(),True),
+    StructField('q1', StringType(),True),
+    StructField('q2', StringType(),True),
+    StructField('q3', StringType(),True),
+])
+
+raw_file_dir = '/mnt/formula1dl/raw/qualifying'
+processed_file_dir = '/mnt/formula1dl/processed'
+
+qualifying_df = spark.read \
+    .schema(qualifying_schema) \
+    .option("multiLine", True) \
+    .json(f"{raw_file_dir}")
+
+qualifying_df = qualifying_df.withColumnRenamed("raceId",'race_id') \
+    .withColumnRenamed("driverId",'driver_id') \
+    .withColumnRenamed("qualifyId",'qualify_id') \
+    .withColumn("ingestion_date", current_timestamp())
+
+qualifying_df.write.mode("overwrite").parquet(f"{processed_file_dir}/qualifying")
+
+display(spark.read.parquet('/mnt/formula1dl/processed/qualifying'))
+
+### Races ###
+
+races_schema = StructType(fields=[StructField("race_id", IntegerType(),False),
+                                     StructField("race_year", IntegerType(),True),
+                                     StructField("round", IntegerType(),True),
+                                     StructField("circuit_id", IntegerType(),True),
+                                     StructField("name", StringType(),True),
+                                     StructField("date", StringType(),True),
+                                     StructField("time", StringType(),True),
+                                     StructField("url", StringType(),True),
+                                    ])
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'races.csv'
+races_df = spark.read \
+ .option('header', True) \
+ .schema(races_schema) \
+ .csv(f"{raw_file_dir}/{file_name}")
+
+races_transformed_df = races_df.select("race_id", "race_year","round","circuit_id","name","date","time")
+
+combined_df = races_transformed_df.withColumn("race_timestamp", to_timestamp(concat(col("date"), lit(" "), col("time")), "yyyy-MM-dd HH:mm:ss")).drop("date","time").withColumn("ingestion_date",current_timestamp())
+
+combined_df.write.mode("overwrite").partitionBy('race_year').parquet(f"{processed_file_dir}/races")
+
+display(spark.read.parquet('/mnt/formula1dl/processed/races'))
+
+### Results ###
+
+results_schema = StructType(fields=[
+    StructField('resultId', IntegerType(),False),
+    StructField('raceId', IntegerType(),False),
+    StructField('driverId', IntegerType(),False),
+    StructField('constructorId', IntegerType(),False),
+    StructField('number', IntegerType(), True),
+    StructField('grid', IntegerType(),False),
+    StructField('position', IntegerType(),True),
+    StructField('positionText', StringType(),False),
+    StructField('positionOrder', IntegerType(),False),
+    StructField('points', FloatType(),False),
+    StructField('laps', IntegerType(),False),
+    StructField('time', StringType(),True),
+    StructField('milliseconds', IntegerType(),True),
+    StructField('fastestLap', IntegerType(),True),
+    StructField('rank', IntegerType(),True),
+    StructField('fastestLapTime', StringType(),True),
+    StructField('fastestLapSpeed', StringType(),True),
+    StructField('statusId', IntegerType(),False),
+])
+
+raw_file_dir = '/mnt/formula1dl/raw'
+processed_file_dir = '/mnt/formula1dl/processed'
+file_name = 'results.json'
+
+results_df = spark.read \
+    .schema(results_schema) \
+    .json(f"{raw_file_dir}/{file_name}")
+
+results_df = results_df.drop('statusId').withColumnRenamed("resultId","results_id") \
+    .withColumnRenamed("raceId",'race_id') \
+    .withColumnRenamed("driverId",'driver_id') \
+    .withColumnRenamed("constructorId",'constructor_id') \
+    .withColumnRenamed("positionText",'position_text') \
+    .withColumnRenamed("positionOrder",'position_order') \
+    .withColumnRenamed("fastestLap",'fastest_lap') \
+    .withColumnRenamed("fastestLapTime",'fastest_lap_time') \
+    .withColumnRenamed("fastestLapSpeed",'fastest_lap_speed') \
+    .withColumn("ingestion_date", current_timestamp())
+
+results_df.write.mode("overwrite").partitionBy('race_id').parquet(f"{processed_file_dir}/results")
+
+%fs
+ls '/mnt/formula1dl/processed/results'
